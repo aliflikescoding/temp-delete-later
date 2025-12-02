@@ -33,44 +33,6 @@ def get_last_3():
 
 # 3. SEND ORDER
 def send_order(order_type, entry, sl, tp):
-    volume = 0.02  # fixed 0.02 lot
-
-    # --- Check margin BEFORE sending the order ---
-    margin_check = mt5.order_calc_margin(order_type, symbol, volume, entry)
-
-    if margin_check is None:
-        print("Margin check failed:", mt5.last_error())
-        return
-    
-    print("Margin required:", margin_check)
-
-    # SAFE LIMIT = 10% of balance
-    balance = mt5.account_info().balance
-    max_margin = balance * 0.10  # 10%
-
-    if margin_check > max_margin:
-        print(f"❌ Margin too high ({margin_check}), max allowed = {max_margin}")
-        print("Trade NOT executed to protect account.")
-        return
-
-    # --- SEND ORDER ---
-    request = {
-        "action": mt5.TRADE_ACTION_PENDING,
-        "symbol": symbol,
-        "volume": volume,
-        "type": order_type,
-        "price": entry,
-        "sl": sl,
-        "tp": tp,
-        "deviation": 20,
-        "magic": 20251124,
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_RETURN
-    }
-
-    result = mt5.order_send(request)
-    print("Order send result:", result)
-
     volume = 0.01
 
     request = {
