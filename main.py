@@ -1,17 +1,53 @@
 import MetaTrader5 as mt5
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 
-# 1. CONNECT MT5
+# ==========================================================
+# FUNCTION: TIDUR SAMPAI CANDLE M30 BERIKUTNYA
+# ==========================================================
+def sleep_until_next_candle():
+    now = datetime.now()
+
+    minute = now.minute
+
+    # tentukan target 00 atau 30 berikutnya
+    if minute < 30:
+        next_minute_mark = 30
+    else:
+        next_minute_mark = 60  # berarti ke menit 00 jam berikutnya
+
+    # buat timestamp target
+    next_candle_time = now.replace(
+        minute=next_minute_mark % 60,
+        second=0,
+        microsecond=0
+    )
+
+    # kalau next_minute_mark 60, berarti jamnya naik 1
+    if next_minute_mark == 60:
+        next_candle_time += timedelta(hours=1)
+
+    # hitung detik
+    sleep_seconds = (next_candle_time - now).total_seconds()
+
+    print(f"Tidur {sleep_seconds:.0f} detik sampai candle M30 baru...\n")
+    time.sleep(sleep_seconds)
+
+# ==========================================================
+# CONNECT MT5
+# ==========================================================
 if not mt5.initialize():
     print("MT5 gagal connect:", mt5.last_error())
     quit()
 
 symbol = "XAUUSD"
 mt5.symbol_select(symbol, True)
-print("Real-time mode ON")
+print("Real-time mode ON\n")
 
-# 2. FUNCTION: GET LAST 3 CANDLES
+# ==========================================================
+# GET LAST 3 CANDLES
+# ==========================================================
 def get_last_3():
     data = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M30, 0, 3)
     if data is None:
@@ -30,8 +66,9 @@ def get_last_3():
 
     return df
 
-
-# 3. SEND ORDER
+# ==========================================================
+# ORDER SENDER
+# ==========================================================
 def send_order(order_type, entry, sl, tp):
     volume = 0.01
 
@@ -67,16 +104,22 @@ def cancel_all_pending(symbol):
     else:
         print("Tidak ada pending order lama.")
 
+# ==========================================================
+# MAIN BOT LOOP — WITH CANDLE WAIT
+# ==========================================================
 
-print("Menunggu setup…")
+print("Menunggu setup…\n")
 
 last_signal_time = None
-MAX_TAIL_MULTIPLIER = 1.0
 PIP = 0.10          # 1 pip XAUUSD
 BUFFER = 8 * PIP    # 8 pip buffer
 
-
 while True:
+
+    # 🔥 BOT TIDUR SAMPAI CANDLE BARU
+    sleep_until_next_candle()
+
+    # Setelah bangun → candle M30 baru sudah selesai
     df = get_last_3()
     if df is None:
         continue
@@ -85,10 +128,11 @@ while True:
     D1 = df.iloc[1]
     D0 = df.iloc[2]
 
+    # Mencegah double signal
     if last_signal_time == D0["time"]:
         continue
 
-        # RULE 1
+    # RULE 1
     if not (D0["body_size"] > D1["body_size"] and D0["body_size"] > D2["body_size"]):
         print(f"[{D0['time']}] Reject: RULE 1 gagal (D0 body tidak terbesar)")
         continue
@@ -102,44 +146,19 @@ while True:
         print(f"[{D0['time']}] Reject: RULE 2 gagal (D2 body terlalu besar)")
         continue
 
-    # RULE 3: tail tidak boleh panjang
-    # if (D1["upper_tail"] > D1["body_size"] * MAX_TAIL_MULTIPLIER) or \
-    #    (D1["lower_tail"] > D1["body_size"] * MAX_TAIL_MULTIPLIER):
-    #     print(f"[{D0['time']}] Reject: Tail D1 terlalu panjang "
-    #           f"(upper={D1['upper_tail']:.2f}, lower={D1['lower_tail']:.2f}, body={D1['body_size']:.2f})")
-    #     continue
-
-    # if (D2["upper_tail"] > D2["body_size"] * MAX_TAIL_MULTIPLIER) or \
-    #    (D2["lower_tail"] > D2["body_size"] * MAX_TAIL_MULTIPLIER):
-    #     print(f"[{D0['time']}] Reject: Tail D2 terlalu panjang "
-    #           f"(upper={D2['upper_tail']:.2f}, lower={D2['lower_tail']:.2f}, body={D2['body_size']:.2f})")
-    #     continue
-
-
-
-    #   HITUNG SL BARU (RULE SL)
-    # BUY = SL di tail terendah antara D1 & D2
+    # ===== HITUNG SIGNAL =====
     if D0["close"] > D0["open"]:
         signal = "BUY LIMIT"
         entry = D1["body_top"]
         tp = D0["body_top"]
         order_type = mt5.ORDER_TYPE_BUY_LIMIT
-
-        # SL = lowest wick (D1.low or D2.low)
-        raw_sl = min(D1["low"], D2["low"])
-        sl = raw_sl - BUFFER
-
-    # SELL = SL di tail tertinggi antara D1 & D2
+        sl = min(D1["low"], D2["low"]) - BUFFER
     else:
         signal = "SELL LIMIT"
         entry = D1["body_bottom"]
         tp = D0["body_bottom"]
         order_type = mt5.ORDER_TYPE_SELL_LIMIT
-
-        # SL = highest wick (D1.high or D2.high)
-        raw_sl = max(D1["high"], D2["high"])
-        sl = raw_sl + BUFFER
-
+        sl = max(D1["high"], D2["high"]) + BUFFER
 
     last_signal_time = D0["time"]
 
@@ -147,8 +166,8 @@ while True:
     print("Time:", D0["time"])
     print("Signal:", signal)
     print("Entry:", entry)
-    print("SL (with wick+5pip):", sl)
-    print("TP:", tp)
+    print("SL:", sl)
+    print("TP:", tp, "\n")
 
     cancel_all_pending(symbol)
     send_order(order_type, entry, sl, tp)
