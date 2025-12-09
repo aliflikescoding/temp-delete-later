@@ -3,67 +3,16 @@ import pandas as pd
 from datetime import datetime
 import time
 
-# -------------------------------------------------------
-# CONNECT MT5
-# -------------------------------------------------------
-print("Connecting to MetaTrader 5...")
-
+# 1. CONNECT MT5
 if not mt5.initialize():
-    print("❌ MT5 gagal connect:", mt5.last_error())
+    print("MT5 gagal connect:", mt5.last_error())
     quit()
-else:
-    print("✔ MT5 berhasil connect\n")
-
-
-# -------------------------------------------------------
-# CEK STATUS AUTO TRADING
-# -------------------------------------------------------
-terminal_info = mt5.terminal_info()
-
-if terminal_info is None:
-    print("❌ Gagal membaca terminal info:", mt5.last_error())
-    quit()
-
-if terminal_info.trade_allowed:
-    print("✔ Auto Trading: ON (hijau)")
-else:
-    print("❌ Auto Trading MATI! (tombol merah) → bot tidak bisa kirim order")
-    quit()
-
-
-# -------------------------------------------------------
-# CEK ACCOUNT INFO
-# -------------------------------------------------------
-account_info = mt5.account_info()
-
-if account_info is None:
-    print("❌ Gagal membaca account info:", mt5.last_error())
-    quit()
-
-print("\n=== ACCOUNT INFO ===")
-print(f"Login     : {account_info.login}")
-print(f"Nama      : {account_info.name}")
-print(f"Server    : {account_info.server}")
-print(f"Leverage  : {account_info.leverage}")
-
-print("\n=== SALDO ===")
-print(f"Balance       : {account_info.balance}")
-print(f"Equity        : {account_info.equity}")
-print(f"Free Margin   : {account_info.margin_free}")
-
-print("\n────────────────────────────────────────────\n")
 
 symbol = "XAUUSD"
 mt5.symbol_select(symbol, True)
-print("Symbol:", symbol, "selected\n")
+print("Real-time mode ON")
 
-# Storage for hidden SL/TP
-hidden_levels = {}   # {ticket: {sl, tp, order_type}}
-
-
-# =============================================
-# FUNCTION: GET LAST 3 CANDLES
-# =============================================
+# 2. FUNCTION: GET LAST 3 CANDLES
 def get_last_3():
     data = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M30, 0, 3)
     if data is None:
@@ -83,9 +32,7 @@ def get_last_3():
     return df
 
 
-# =============================================
-# 2. SEND HIDDEN ORDER (NO SL/TP SENT TO BROKER)
-# =============================================
+# 3. SEND ORDER
 def send_order(order_type, entry, sl, tp):
     volume = 0.02
 
@@ -95,6 +42,8 @@ def send_order(order_type, entry, sl, tp):
         "volume": volume,
         "type": order_type,
         "price": entry,
+        "sl": sl,
+        "tp": tp,
         "deviation": 20,
         "magic": 20251124,
         "type_time": mt5.ORDER_TIME_GTC,
@@ -104,21 +53,7 @@ def send_order(order_type, entry, sl, tp):
     result = mt5.order_send(request)
     print("Order send result:", result)
 
-    # If order creation successful → store hidden SL/TP
-    if result and result.order > 0:
-        hidden_levels[result.order] = {
-            "sl": sl,
-            "tp": tp,
-            "order_type": order_type
-        }
-        print(f"Hidden SL/TP stored for ticket {result.order}")
 
-    return result
-
-
-# =============================================
-# CANCEL ALL PENDING ORDERS
-# =============================================
 def cancel_all_pending(symbol):
     orders = mt5.orders_get(symbol=symbol)
     if orders:
@@ -133,41 +68,36 @@ def cancel_all_pending(symbol):
     else:
         print("Tidak ada pending order lama.")
 
-
-# =============================================
-# RULE 1 – D0 body > D1 & D2
-# =============================================
+# FUNCTION 3: CHECK RULE 1 (D0 > D1 & D2
 def is_rule1_acc(D0, D1, D2):
     if not (D0["body_size"] > D1["body_size"] and D0["body_size"] > D2["body_size"]):
         return False
 
     if D1["body_size"] > D0["body_size"] * 0.5:
         return False
+
     if D2["body_size"] > D0["body_size"] * 0.5:
         return False
 
     return True
 
-
-# =============================================
-# RULE 2 – TAIL FILTER
-# =============================================
+# FUNCTION 4: RULE BARU TAIL (TAIL ≤ 2× BODY D0
 def is_rule2_acc(D0, D1, D2, MAX_TAIL_MULTIPLIER):
     max_tail = D0["body_size"] * MAX_TAIL_MULTIPLIER
 
+    # D1 CHECK
     if D1["upper_tail"] > max_tail or D1["lower_tail"] > max_tail:
-        print("Reject: Tail D1 > limit")
+        print("Reject: Tail D1 > 2× body D0")
         return False
+
+    # D2 CHECK
     if D2["upper_tail"] > max_tail or D2["lower_tail"] > max_tail:
-        print("Reject: Tail D2 > limit")
+        print("Reject: Tail D2 > 2× body D0")
         return False
 
     return True
 
-
-# =============================================
-# BUY / SELL LOGIC
-# =============================================
+# FUNCTION 5: BUY / SELL LOGI
 def is_signal_buyORsell(D0, D1, D2):
     if D0["close"] > D0["open"]:     # bullish D0 → BUY LIMIT
         return {
@@ -177,7 +107,8 @@ def is_signal_buyORsell(D0, D1, D2):
             "tp": D0["body_top"],
             "order_type": mt5.ORDER_TYPE_BUY_LIMIT
         }
-    else:  # bearish → SELL LIMIT
+
+    else:                            # bearish D0 → SELL LIMIT
         return {
             "signal": "SELL LIMIT",
             "entry": D1["body_bottom"],
@@ -186,108 +117,56 @@ def is_signal_buyORsell(D0, D1, D2):
             "order_type": mt5.ORDER_TYPE_SELL_LIMIT
         }
 
-
-# =============================================
-# CLEAR THE HIDDEN LEVEL OBJECT
-# =============================================
-def clear_hidden_levels():
-    count = len(hidden_levels)
-    hidden_levels.clear()
-    print(f"🧹 Cleared {count} hidden SL/TP entries.")
-
-# =============================================
-# MONITOR HIDDEN SL/TP
-# =============================================
-def check_hidden_sl_tp():
-    positions = mt5.positions_get(symbol=symbol)
-
-    if positions is None:
-        return
-
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        return
-
-    bid = tick.bid
-    ask = tick.ask
-
-    for pos in positions:
-        ticket = pos.ticket
-
-        if ticket not in hidden_levels:
+# FUNCTION 1: TIDUR SAMPAI CANDLE BARU M3
+def sleep_until_next_candle():
+    while True:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            print("Gagal mendapatkan tick MT5, retry...")
+            time.sleep(1)
             continue
 
-        info = hidden_levels[ticket]
-        sl = info["sl"]
-        tp = info["tp"]
+        # waktu server MT5
+        now = datetime.fromtimestamp(tick.time)
+        minute = now.minute
 
-        # BUY LIMIT turns into BUY position
-        if pos.type == mt5.ORDER_TYPE_BUY:
-            price = bid
+        # Candle M30 → next 00 atau 30
+        if minute < 30:
+            next_minute_mark = 30
+            next_hour = now.hour
+        else:
+            next_minute_mark = 0
+            next_hour = (now.hour + 1) % 24
 
-            if price <= sl:
-                print(f"🚨 HIDDEN SL HIT (BUY) → closing ticket {ticket}")
-                mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "position": ticket,
-                    "type": mt5.ORDER_TYPE_SELL,
-                    "volume": pos.volume
-                })
-                del hidden_levels[ticket]
+        next_candle_time = now.replace(
+            hour=next_hour,
+            minute=next_minute_mark,
+            second=0,
+            microsecond=0
+        )
 
-            elif price >= tp:
-                print(f"🎯 HIDDEN TP HIT (BUY) → closing ticket {ticket}")
-                mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "position": ticket,
-                    "type": mt5.ORDER_TYPE_SELL,
-                    "volume": pos.volume
-                })
-                del hidden_levels[ticket]
+        sleep_seconds = (next_candle_time - now).total_seconds()
 
-        # SELL LIMIT turns into SELL position
-        elif pos.type == mt5.ORDER_TYPE_SELL:
-            price = ask
-
-            if price >= sl:
-                print(f"🚨 HIDDEN SL HIT (SELL) → closing ticket {ticket}")
-                mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "position": ticket,
-                    "type": mt5.ORDER_TYPE_BUY,
-                    "volume": pos.volume
-                })
-                del hidden_levels[ticket]
-
-            elif price <= tp:
-                print(f"🎯 HIDDEN TP HIT (SELL) → closing ticket {ticket}")
-                mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
-                    "position": ticket,
-                    "type": mt5.ORDER_TYPE_BUY,
-                    "volume": pos.volume
-                })
-                del hidden_levels[ticket]
+        if sleep_seconds > 0:
+            print(f"\nMT5 Server Time: {now}")
+            print(f"Tidur {sleep_seconds:.0f} detik sampai candle berikutnya...")
+            time.sleep(sleep_seconds)
+            return
+        
+        # Jika sudah lewat beberapa milidetik → retry
+        time.sleep(0.2)
 
 
-# =============================================
-# MAIN LOOP
-# =============================================
 print("Menunggu setup…")
 
 last_signal_time = None
 MAX_TAIL_MULTIPLIER = 1.0
-PIP = 0.10
-BUFFER = 8 * PIP
+PIP = 0.10          # 1 pip XAUUSD
+BUFFER = 8 * PIP    # 8 pip buffer
+
 
 while True:
-
-    # Always monitor hidden SL/TP in every loop
-    check_hidden_sl_tp()
+    time.sleep(120)
 
     df = get_last_3()
     if df is None:
@@ -297,11 +176,16 @@ while True:
     D1 = df.iloc[1]
     D0 = df.iloc[2]
 
+    #if last_signal_time == D0["time"]:
+    #continue
+
     if not is_rule1_acc(D0, D1, D2):
         continue
+
     if not is_rule2_acc(D0, D1, D2, MAX_TAIL_MULTIPLIER):
         continue
 
+    # dapat signal
     order = is_signal_buyORsell(D0, D1, D2)
     signal = order["signal"]
     entry = float(order["entry"])
@@ -309,19 +193,20 @@ while True:
     tp = float(order["tp"])
     order_type = order["order_type"]
 
-    # buffer added
+    # tambahkan buffer ke SL agar ada ruang wick + buffer
     if order_type == mt5.ORDER_TYPE_BUY_LIMIT:
         sl = raw_sl - BUFFER
-    else:
+    else:  # SELL_LIMIT
         sl = raw_sl + BUFFER
+
+    last_signal_time = D0["time"]
 
     print("\n=== SETUP TERDETEKSI ===")
     print("Time:", D0["time"])
     print("Signal:", signal)
     print("Entry:", entry)
-    print("HIDDEN SL:", sl)
-    print("HIDDEN TP:", tp)
+    print("SL (with wick+8pip):", sl)
+    print("TP:", tp)
 
     cancel_all_pending(symbol)
-    clear_hidden_levels()
     send_order(order_type, entry, sl, tp)
