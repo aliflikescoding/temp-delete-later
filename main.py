@@ -211,9 +211,9 @@ while True:
     D0 = df.iloc[2]
 
     print("\n=== CEK URUTAN CANDLE DARI MT5 ===")
-    print("D0 =", D0)
-    print("D1 =", D1)
-    print("D2 =", D2)
+    print("D0 =", D0['time'])
+    print("D1 =", D1['time'])
+    print("D2 =", D2['time'])
 
 
     # CEK DUPLIKASI SIGNAL
