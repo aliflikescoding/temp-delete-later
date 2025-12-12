@@ -71,12 +71,15 @@ def cancel_all_pending(symbol):
 # FUNCTION 3: CHECK RULE 1 (D0 > D1 & D2
 def is_rule1_acc(D0, D1, D2):
     if not (D0["body_size"] > D1["body_size"] and D0["body_size"] > D2["body_size"]):
+        print("D0 tidak paling besar.")
         return False
 
     if D1["body_size"] > D0["body_size"] * 0.5:
+        print("D0 tidak 2X D1.")
         return False
 
     if D2["body_size"] > D0["body_size"] * 0.5:
+        print("D0 tidak 2X D2.")
         return False
 
     return True
@@ -158,6 +161,34 @@ def sleep_until_next_candle():
         # Jika sudah lewat beberapa milidetik → retry
         time.sleep(0.2)
 
+# proteksi sebelum sleep lagi
+def time_protection(symbol, last_candle_time, max_wait=30):
+    print(f"[{last_candle_time}] Candle masih sama, menunggu candle baru...")
+
+    waited = 0
+
+    while waited < max_wait:
+        time.sleep(1)
+        waited += 1
+
+        print(f"  - Cek ulang ({waited}s)...")
+
+        df_new = get_last_3()
+        if df_new is None:
+            print("  - Gagal ambil candle, retry...")
+            continue
+
+        D0_new = df_new.iloc[2]
+
+        # Jika candle sudah berubah → return data baru
+        if D0_new["time"] != last_candle_time:
+            print(f"  ✔ Candle baru terdeteksi: {D0_new['time']}")
+            return df_new  # return seluruh df baru
+
+    # timeout
+    print("❌ Timeout 30 detik: Tidak ada candle baru muncul.")
+    return None
+
 
 print("Menunggu setup…")
 
@@ -172,20 +203,38 @@ while True:
 
     df = get_last_3()
     if df is None:
+        print("Gagal ambil candle")
         continue
 
     D2 = df.iloc[0]
     D1 = df.iloc[1]
     D0 = df.iloc[2]
 
+    # CEK DUPLIKASI SIGNAL
     if last_signal_time == D0["time"]:
-        continue
+        # time protection: ngecek lagi setiap 1 detik selama 30 detik
+        df_new = time_protection(symbol, last_signal_time)
+    
+        # kalau gagal dapat candle baru
+        if df_new is None:
+            print("selaman time protection berlangsung, tidak meneukan candle baru. tidur lagi sampai .00 or .30. SEGERA LAKUKAN PENGECEKAN CODE!!! ADA KEMUNGKINAN KESALAHAN")
+            continue
+    
+        # update D0, D1, D2 ke candle baru
+        D2 = df_new.iloc[0]
+        D1 = df_new.iloc[1]
+        D0 = df_new.iloc[2]
+
 
     if not is_rule1_acc(D0, D1, D2):
         continue
 
+    print("Rule 1 ACC: D0 paling besar dan 2X dari D1 dan D2")
+
     if not is_rule2_acc(D0, D1, D2, MAX_TAIL_MULTIPLIER):
         continue
+
+    print("Rule 2 ACC: body D0 2X lebih besar dari upper/lower tail D1 dan D2. otw send order!!!")
 
     # dapat signal
     order = is_signal_buyORsell(D0, D1, D2)
