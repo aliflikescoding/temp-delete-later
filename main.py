@@ -178,8 +178,8 @@ while True:
     D1 = df.iloc[1]
     D0 = df.iloc[2]
 
-    #if last_signal_time == D0["time"]:
-    #continue
+    if last_signal_time == D0["time"]:
+        continue
 
     if not is_rule1_acc(D0, D1, D2):
         continue
