@@ -284,7 +284,7 @@ def check_hidden_sl_tp():
 
             if price <= sl or price >= tp:
                 mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL",
+                    "action": mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
                     "position": ticket,
                     "type": mt5.ORDER_TYPE_SELL,
@@ -303,7 +303,7 @@ def check_hidden_sl_tp():
 
             if price >= sl or price <= tp:
                 mt5.order_send({
-                    "action": mt5.TRADE_ACTION_DEAL",
+                    "action": mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
                     "position": ticket,
                     "type": mt5.ORDER_TYPE_BUY,
